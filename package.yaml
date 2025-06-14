@@ -1,0 +1,42 @@
+name:                gameboy
+version:             0.1.0.0
+#synopsis:
+#description:
+homepage:            https://github.com/githubuser/gameboy#readme
+license:             MPL-2.0
+author:              Matthew Hayden
+maintainer:          mrehayden@gmail.com
+copyright:           2025 Matthew Hayden
+category:            Game
+extra-source-files:
+- README.md
+- CHANGELOG.md
+
+default-extensions:
+- GeneralizedNewtypeDeriving
+- MagicHash
+- RankNTypes
+- TypeFamilies
+- UnliftedFFITypes
+
+dependencies:
+  - base >= 4.7 && < 5
+  - array
+  - lens
+  - mtl
+
+ghc-options:
+- -Wall
+- -Wcompat
+- -Widentities
+- -Wincomplete-record-updates
+- -Wincomplete-uni-patterns
+- -Wmissing-export-lists
+- -Wmissing-home-modules
+- -Wpartial-fields
+- -Wredundant-constraints
+
+executables:
+  gameboy:
+    source-dirs:      src
+    main:             Main.hs

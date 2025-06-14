@@ -1,0 +1,3 @@
+[submodule "gb-test-roms"]
+	path = roms/blargg
+	url = git@github.com:mrehayden1/gb-test-roms.git
