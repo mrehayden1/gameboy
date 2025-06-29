@@ -1,92 +1,27 @@
 {- HLINT ignore "Use camelCase" -}
 module Cpu (
   Cpu,
-  runCpu,
   step,
 
-  printInstruction,
-  printRegisters,
-  printMemory
+  sb,
+  sc
 ) where
 
 import Control.Lens
-import Control.Monad
-import Control.Monad.IO.Class
 import Control.Monad.State
-import Data.Array.IO
-import Data.Bits
-import Data.Bits.Extra
-import Data.Bits.Lens
-import Data.Bool
-import Data.Kind
-import Data.Word
-import Text.Printf
 
-import Rom
+import Cpu.Alu
+import Cpu.Core
+import Cpu.Interrupt
+import Cpu.Jump
+import Cpu.Load
+import Cpu.Subroutine
 
+sb :: Location
+sb = Location 0xff01
 
-newtype Cpu a = Cpu { unCpuM :: StateT CpuS IO a }
- deriving (Functor, Applicative, Monad, MonadIO, MonadState CpuS)
-
-data CpuS = CpuS {
-  a_   :: !Word8,
-  f_   :: !Word8,
-  b_   :: !Word8,
-  c_   :: !Word8,
-  d_   :: !Word8,
-  e_   :: !Word8,
-  h_   :: !Word8,
-  l_   :: !Word8,
-  mem_ :: IOUArray Word16 Word8,
-  pc_  :: !Word16,
-  sp_  :: !Word16
-}
-
-printRegisters :: Cpu ()
-printRegisters = do
-  cpu <- get
-  liftIO $ do
-    putStrLn "General Purpose Registers:"
-    let rs = [("A", a_), ("B", b_), ("C", c_), ("D", d_), ("E", e_), ("H", h_),
-              ("L", l_)]
-    mapM_ (\(n, fn) -> printf "%2s: 0x%02x\n" n . fn $ cpu) rs
-    putStrLn ""
-
-    putStrLn "Flags:"
-    let fs = [("Z", 7), ("N", 6), ("H", 5), ("C", 4)]
-    forM_ fs $ \(n, bn) ->
-      printf "%2s: %d\n" n . bool 0 (1 :: Int) . testBit (f_ cpu) $ bn
-    putStrLn ""
-
-    putStrLn "Special Registers:"
-    let ss = [("PC", pc_), ("SP", sp_)]
-    mapM_ (\(n, fn) -> printf "%2s: 0x%04x\n" n . fn $ cpu) ss
-
-printMemory :: Cpu ()
-printMemory = do
-  mem <- gets mem_
-  liftIO $ do
-    forM_ [0, 0x0010..0xffff] $ \block -> do
-      printBlock mem block
-      putStrLn ""
-
-printBlock :: IOUArray Word16 Word8 -> Word16 -> IO ()
-printBlock mem block = do
-  printf "%04x: " block
-  forM_ [block, block+0x0002..block+0x000f] $ \group -> do
-    forM_ [group, group+0x001] $
-      readArray mem >=> printf "%02x"
-    putStr " "
-
-printInstruction :: Cpu ()
-printInstruction = do
-  mem <- gets mem_
-  pc' <- gets pc_
-  let block = pc' - (pc' `mod` 16)
-  liftIO $ do
-    printf "%2s: 0x%04x\n" "PC" pc'
-    printBlock mem block
-  return ()
+sc :: Location
+sc = Location 0xff02
 
 -- Memory map
 --
@@ -96,211 +31,45 @@ printInstruction = do
 --   0x0150 – 0x3FFF — ...
 
 
-runCpu :: Cpu a -> IO a
-runCpu cpu = do
-  s <- initCpuS
-  flip evalStateT s . unCpuM $ cpu
-
-initCpuS :: IO CpuS
-initCpuS = do
-  mem <- newArray_ (0, 0xffff)
-
-  putStrLn "Loading Blargg's CPU instruction test ROM"
-  loadRom "roms/blargg/cpu_instrs/cpu_instrs.gb" mem
-
-  -- Initialise the CPU to the values set by the Nintendo boot rom.
-  return CpuS {
-    a_   = 0x01,
-    f_   = 0xb0,
-    b_   = 0x00,
-    c_   = 0x13,
-    d_   = 0x00,
-    e_   = 0xd8,
-    h_   = 0x01,
-    l_   = 0x4d,
-    mem_ = mem,
-    pc_  = 0x0100,
-    sp_  = 0xfffe
-  }
-
-class CpuStorable l where
-  type CpuType l :: Type
-  peek :: l -> Cpu (CpuType l)
-  poke :: l -> CpuType l -> Cpu ()
-
-
-pokeWith :: CpuStorable l => l -> (CpuType l -> CpuType l) -> Cpu ()
-pokeWith ln fn = do
-  x <- peek ln
-  poke ln $ fn x
-
-pokeWith' :: CpuStorable l => l -> (CpuType l -> CpuType l) -> Cpu (CpuType l)
-pokeWith' ln fn = do
-  x <- peek ln
-  let x' = fn x
-  poke ln x'
-  return x'
-
-
--- A memory location that stores an 8-bit value.
-newtype Location = Location { unLocation :: Word16 }
- deriving (Eq, Ord, Show, Num)
-
-instance CpuStorable Location
- where
-  type CpuType Location = Word8
-  peek (Location addr) = do
-    mem <- gets mem_
-    liftIO . readArray mem $ addr
-  poke (Location addr) x = do
-    mem <- gets mem_
-    liftIO . writeArray mem addr $ x
-
-
--- A memory location that stores a 16-bit value.
-newtype Location16 = Location16 { unLocation16 :: Word16 }
- deriving (Eq, Ord, Show, Num)
-
-instance CpuStorable Location16
- where
-  type CpuType Location16 = Word16
-  peek (Location16 addr) = do
-    mem <- gets mem_
-    lo <- liftIO . readArray mem $ addr
-    hi <- liftIO . readArray mem $ addr + 1
-    return . word16 hi $ lo
-  poke (Location16 addr) x = do
-    mem <- gets mem_
-    let (hi, lo) = unWord16 x
-    liftIO . writeArray mem addr $ lo
-    liftIO . writeArray mem (addr + 1) $ hi
-
-
--- Registers
-
-newtype Register = Register (Lens' CpuS Word8)
-
-instance CpuStorable Register
- where
-  type CpuType Register = Word8
-  peek (Register r) = gets (^. r)
-  poke (Register r) x = modify (r .~ x)
-
-
--- Accumulator
-a :: Register
-a = Register $ lens a_ (\s x -> s { a_ = x })
-
--- Flags
-flens :: Lens' CpuS Word8
-flens = lens f_ (\s x -> s { f_ = x })
-
-f :: Register
-f = Register flens
-
--- General purpose
-b :: Register
-b = Register $ lens b_ (\s x -> s { b_ = x })
-
--- General purpose
-c :: Register
-c = Register $ lens c_ (\s x -> s { c_ = x })
-
--- General purpose
-d :: Register
-d = Register $ lens d_ (\s x -> s { d_ = x })
-
--- General purpose
-e :: Register
-e = Register $ lens e_ (\s x -> s { e_ = x })
-
--- General purpose
-h :: Register
-h = Register $ lens h_ (\s x -> s { h_ = x })
-
--- General purpose
-l :: Register
-l = Register $ lens l_ (\s x -> s { l_ = x })
-
-
--- Flags
-
-newtype Flag = Flag (Lens' CpuS Bool)
-
-instance CpuStorable Flag
- where
-  type CpuType Flag = Bool
-  peek (Flag fl) = gets (^. fl)
-  poke (Flag fl) x = modify (fl .~ x)
-
--- Zero flag
-zf :: Flag
-zf = Flag $ flens . bitAt 7
-
--- Subtract flag
-nf :: Flag
-nf = Flag $ flens . bitAt 6
-
--- Half carry flag
-hf :: Flag
-hf = Flag $ flens . bitAt 5
-
--- Carry flag
-cf :: Flag
-cf = Flag $ flens . bitAt 4
-
--- 16-bit virtual registers
-
-newtype Register16 = Register16 (Lens' CpuS Word16)
-
-instance CpuStorable Register16
- where
-  type CpuType Register16 = Word16
-  peek (Register16 r) = gets (^. r)
-  poke (Register16 r) x = modify (r .~ x)
-
-
-af :: Register16
-af = register16 a f
-
-bc :: Register16
-bc = register16 c b
-
-de :: Register16
-de = register16 e d
-
-hl :: Register16
-hl = register16 l h
-
-pc :: Register16
-pc = Register16 $ lens pc_ (\s x -> s { pc_ = x })
-
-sp :: Register16
-sp = Register16 $ lens sp_ (\s x -> s { sp_ = x })
-
-
-register16 :: Register -> Register -> Register16
-register16 (Register hi) (Register lo) = Register16 $ lens getter setter
- where
-  getter :: CpuS -> Word16
-  getter cpu =
-    let xhi = view hi cpu
-        xlo = view lo cpu
-    in word16 xhi xlo
-  setter :: CpuS -> Word16 -> CpuS
-  setter cpu x =
-    let (xhi, xlo) = unWord16 x
-    in (lo .~ xlo) . (hi .~ xhi) $ cpu
-
-
--- Executes the next instruction
+-- step - Executes the next instruction
 --
--- TODO Move all single use instructions (those in do blocks here) to variables
--- for easier maintenance.
+--
+-- Each function here represents one or more CPU instructions that have the
+-- same format, i.e. are the same size in memory and take the same number of
+-- clock cycles to execute.
+--
+-- Format: e.g. ld_[dst]_[src]
+--
+--   where src/dst describes the source/destination (first/second) operand:
+--
+--     a|sp etc.  named register
+--     r8         8-bit register
+--     r16        16-bit reigster
+--     n8         immediate 8-bit value
+--     n16        immediate 16-bit value
+--
+--   when capitalised the src or dest is some kind of memory address
+--
+--     R16        immediate absolute address
+--     HL         absolute address stored in register HL
+--     HL'        "        "       "      "  "        "
+--                which is incremented or decremented afterwards
+
 step :: Cpu ()
 step = do
   pc' <- peek pc
   opCode <- peek $ Location pc'
+
+  -- TODO Hang on illegal opcodes (including corrupted STOP op codes)
+  --  — find out what that means exactly.
+
+  -- Handle interrupts
+
+  -- IME enable delay
+  ime' <- gets (^. ime)
+  case ime' of
+    Left _  -> modify $ ime .~ Right True
+    _       -> return ()
 
   -- For op codes and descriptions see:
   -- https://www.pastraiser.com/cpu/gameboy/gameboy_opcodes.html
@@ -308,11 +77,10 @@ step = do
   case opCode of
 
     -- 0x0x
-
     -- NOP
     0x00 -> noop
     -- LD BC d16
-    0x01 -> ld_r16_N16 bc
+    0x01 -> ld_r16_n16 bc
     -- LD (BC) A
     0x02 -> ld_R16_r8 bc a
     -- INC BC
@@ -343,15 +111,10 @@ step = do
     0x0f -> rotateR_a
 
     -- 0x1x
-
-    -- TODO STOP
-    0x10 -> do
-      -- NB: Corrupted STOP instructions hang the CPU i.e. anything other than
-      -- 0x10 0x00
-      incPc 2
-      syncCycles 4
+    -- STOP
+    0x10 -> undefined -- stop
     -- LD DE d16
-    0x11 -> ld_r16_N16 de
+    0x11 -> ld_r16_n16 de
     -- LD (DE) A
     0x12 -> ld_R16_r8 de a
     -- INC DE
@@ -383,9 +146,9 @@ step = do
 
     -- 0x2x
     -- JR NZ r8
-    0x20 -> jrNCc zf
+    0x20 -> jrCc True zf
     -- LD HL d16
-    0x21 -> ld_r16_N16 hl
+    0x21 -> ld_r16_n16 hl
     -- LD (HL+) A
     0x22 -> ld_HL'_a Inc
     -- INC HL
@@ -399,7 +162,7 @@ step = do
     -- DAA
     0x27 -> undefined
     -- JR Z r8
-    0x28 -> jrCc zf
+    0x28 -> jrCc False zf
     -- ADD HL HL
     0x29 -> add_hl_r16 hl
     -- LD A (HL+)
@@ -413,13 +176,13 @@ step = do
     -- LD L d8
     0x2e -> ld_r8_n8 l
     -- CPL
-    0x2f -> complementA
+    0x2f -> complement_a
 
     -- 0x3x
     -- JR NC r8
-    0x30 -> jrNCc cf
+    0x30 -> jrCc True cf
     -- LD SP d16
-    0x31 -> ld_r16_N16 sp
+    0x31 -> ld_r16_n16 sp
     -- LD (HL-) A
     0x32 -> ld_HL'_a Dec
     -- INC SP
@@ -431,9 +194,9 @@ step = do
     -- LD (HL) d8
     0x36 -> ld_HL_n8
     -- SCF
-    0x37 -> setCarry
+    0x37 -> set_cf
     -- JR C r8
-    0x38 -> jrCc cf
+    0x38 -> jrCc False cf
     -- ADD HL SP
     0x39 -> add_hl_r16 sp
     -- LD A (HL-)
@@ -447,10 +210,9 @@ step = do
     -- LD A d8
     0x3e -> ld_r8_n8 a
     -- CCF
-    0x3f -> complementCarry
+    0x3f -> complement_cf
 
     -- 0x4x
-
     -- LD B B
     0x40 -> ld_r8_r8 b b
     -- LD B C
@@ -485,7 +247,6 @@ step = do
     0x4f -> ld_r8_r8 c a
 
     -- 0x5x
-
     -- LD D B
     0x50 -> ld_r8_r8 d b
     -- LD D C
@@ -520,7 +281,6 @@ step = do
     0x5f -> ld_r8_r8 e a
 
     -- 0x6x
-
     -- LD H B
     0x60 -> ld_r8_r8 h b
     -- LD H C
@@ -555,7 +315,6 @@ step = do
     0x6f -> ld_r8_r8 l a
 
     -- 0x7x
-
     -- LD (HL) B
     0x70 -> ld_R16_r8 hl b
     -- LD (HL) C
@@ -607,21 +366,21 @@ step = do
     -- ADD A A
     0x87 -> add_r8 a
     -- ADC A B
-    0x88 -> adc_a_r8 b
+    0x88 -> adc_r8 b
     -- ADC A C
-    0x89 -> adc_a_r8 c
+    0x89 -> adc_r8 c
     -- ADC A D
-    0x8a -> adc_a_r8 d
+    0x8a -> adc_r8 d
     -- ADC A E
-    0x8b -> adc_a_r8 e
+    0x8b -> adc_r8 e
     -- ADC A H
-    0x8c -> adc_a_r8 h
+    0x8c -> adc_r8 h
     -- ADC A L
-    0x8d -> adc_a_r8 l
+    0x8d -> adc_r8 l
     -- ADC A (HL)
-    0x8e -> adc_a_HL
+    0x8e -> adc_HL
     -- ADC A A
-    0x8f -> adc_a_r8 a
+    0x8f -> adc_r8 a
 
     -- 0x9x
     -- SUB B
@@ -726,93 +485,145 @@ step = do
     0xbf -> compare_r8 a
 
     -- 0xCx
-    0xc0 -> undefined
-    0xc1 -> undefined
-    0xc2 -> undefined
-    0xc3 -> undefined
-    0xc4 -> undefined
-    0xc5 -> undefined
-    0xc6 -> undefined
-    0xc7 -> undefined
-    0xc8 -> undefined
-    0xc9 -> undefined
-    0xca -> undefined
+    -- RET NZ
+    0xc0 -> retCc True zf
+    -- POP BC
+    0xc1 -> pop_r16 bc
+    -- JP NZ a16
+    0xc2 -> jpCc_n16 True zf
+    -- JP a16
+    0xc3 -> jp_n16
+    -- CALL NZ a16
+    0xc4 -> callCc_n16 True zf
+    -- PUSH BC
+    0xc5 -> push_r16 bc
+    -- ADD A d8
+    0xc6 -> add_n8
+    -- RST 00H
+    0xc7 -> rst 0x00
+    -- RET Z
+    0xc8 -> retCc False zf
+    -- RET
+    0xc9 -> ret
+    -- JP Z a16
+    0xca -> jpCc_n16 False zf
     -- PREFIX CB
     0xcb -> prefixCB
-    0xcc -> undefined
-    0xcd -> undefined
-    0xce -> undefined
-    0xcf -> undefined
+    -- CALL Z 16
+    0xcc -> callCc_n16 False zf
+    -- CALL a16
+    0xcd -> call_n16
+    -- ADC A d8
+    0xce -> adc_n8
+    -- RST 08H
+    0xcf -> rst 0x08
 
     -- 0xDx
-    0xd0 -> undefined
-    0xd1 -> undefined
-    0xd2 -> undefined
+    -- RET NC
+    0xd0 -> retCc True cf
+    -- POP DE
+    0xd1 -> pop_r16 de
+    -- JP NC a16
+    0xd2 -> jpCc_n16 True cf
     -- ILLEGAL
-    0xd3 -> undefined
-    0xd4 -> undefined
-    0xd5 -> undefined
-    0xd6 -> undefined
-    0xd7 -> undefined
-    0xd8 -> undefined
+    0xd3 -> return ()
+    -- CALL NC a16
+    0xd4 -> callCc_n16 True cf
+    -- PUSH DE
+    0xd5 -> push_r16 de
+    -- SUB d8
+    0xd6 -> sub_n8
+    -- RST 10H
+    0xd7 -> rst 0x10
+    -- RET C
+    0xd8 -> retCc False cf
+    -- RETI
     0xd9 -> undefined
-    0xda -> undefined
+    -- JP C a16
+    0xda -> jpCc_n16 False cf
     -- ILLEGAL
-    0xdb -> undefined
-    0xdc -> undefined
+    0xdb -> return ()
+    -- CALL C a16
+    0xdc -> callCc_n16 False cf
     -- ILLEGAL
-    0xdd -> undefined
-    0xde -> undefined
-    0xdf -> undefined
+    0xdd -> return ()
+    -- SBC A d8
+    0xde -> sbc_n8
+    -- RST 18H
+    0xdf -> rst 0x18
 
     -- 0xEx
-    0xe0 -> undefined
-    0xe1 -> undefined
-    0xe2 -> undefined
+    -- LDH (a8) A
+    0xe0 -> ldh_N8_a
+    -- POP HL
+    0xe1 -> pop_r16 hl
+    -- LD (C) A
+    0xe2 -> ldh_C_a
     -- ILLEGAL
-    0xe3 -> undefined
+    0xe3 -> return ()
     -- ILLEGAL
-    0xe4 -> undefined
-    0xe5 -> undefined
-    0xe6 -> undefined
-    0xe7 -> undefined
-    0xe8 -> undefined
-    0xe9 -> undefined
-    0xea -> undefined
+    0xe4 -> return ()
+    -- PUSH HL
+    0xe5 -> push_r16 hl
+    -- AND d8
+    0xe6 -> and_n8
+    -- RST 20H
+    0xe7 -> rst 0x20
+    -- ADD SP r8
+    0xe8 -> add_sp_i8
+    -- JP (HL)
+    0xe9 -> jp_HL
+    -- LD (a16) A
+    0xea -> ld_N16_a
     -- ILLEGAL
-    0xeb -> undefined
+    0xeb -> return ()
     -- ILLEGAL
-    0xec -> undefined
+    0xec -> return ()
     -- ILLEGAL
-    0xed -> undefined
-    0xee -> undefined
-    0xef -> undefined
+    0xed -> return ()
+    -- XOR d8
+    0xee -> xor_n8
+    -- RST 28H
+    0xef -> rst 0x28
 
     -- 0xFx
-    0xf0 -> undefined
-    0xf1 -> undefined
-    0xf2 -> undefined
-    0xf3 -> undefined
+    -- LDH A (a8)
+    0xf0 -> ldh_a_N8
+    -- POP AF
+    0xf1 -> pop_r16 af
+    -- LD A (C)
+    0xf2 -> ldh_a_C
+    -- DI
+    0xf3 -> disableInterrupts
     -- ILLEGAL
-    0xf4 -> undefined
-    0xf5 -> undefined
-    0xf6 -> undefined
-    0xf7 -> undefined
+    0xf4 -> return ()
+    -- PUSH AF
+    0xf5 -> push_r16 af
+    -- OR d8
+    0xf6 -> or_n8
+    -- RST 30H
+    0xf7 -> rst 0x30
+    -- LD HL SP+r8
     0xf8 -> undefined
+    -- LD SP HL
     0xf9 -> undefined
-    0xfa -> undefined
-    0xfb -> undefined
+    -- LD A (a16)
+    0xfa -> ld_a_N16
+    -- EI
+    0xfb -> enableInterrupts
     -- ILLEGAL
-    0xfc -> undefined
+    0xfc -> return ()
     -- ILLEGAL
-    0xfd -> undefined
-    0xfe -> undefined
-    0xff -> undefined
+    0xfd -> return ()
+    -- CP d8
+    0xfe -> compare_n8
+    -- RST 38H
+    0xff -> rst 0x38
 
     -- Unreachable, keep the linter happer
     _    -> undefined
 
-
+-- Instructions prefixed with byte 0xCB
 prefixCB :: Cpu ()
 prefixCB = do
   pc' <- peek pc
@@ -1369,777 +1180,6 @@ prefixCB = do
     -- Unreachable, keep the linter happer
     _ -> undefined
 
-incPc :: Word16 -> Cpu ()
-incPc x = pokeWith pc (+ x)
-
--- Sync execution to the number of clock cycles given by n.
-syncCycles :: Int -> Cpu ()
-syncCycles n = return ()
-
-
--- CPU instructions
---
--- Each function here represents one or more CPU instructions that have the
--- same format, i.e. are the same size in memory and take the same number of
--- clock cycles to execute.
---
--- Format: e.g. ld_[dst]_[src]
---
---   where src/dst describes the source/destination (first/second) operand:
---
---     a|sp etc.  named register
---     r8         8-bit register
---     r16        16-bit reigster
---     n8         immediate 8-bit value
---     n16        immediate 16-bit value
---
---   when capitalised the src or dest is some kind of memory address
---
---     R16        immediate absolute address
---     HL         absolute address stored in register HL
---     HL'        "        "       "      "  "        "
---                which is incremented or decremented afterwards
---
-
--- Increment/decrement flag used for some instructions
-data IncDec = Inc | Dec
-
-incDec :: Num a => IncDec -> a -> a
-incDec Dec = subtract 1
-incDec Inc = (+ 1)
-
--- Arithmetic/logic instructions
---
--- If one of these instructions has a destination (everything but compare) it
--- is always understood to be the accumulator, `a'.
-
-add_r8 :: Register -> Cpu ()
-add_r8 r = do
-  a' <- peek a
-  r' <- peek r
-  let x = a' + r'
-  poke a x
-  poke zf $ x == 0
-  poke nf False
-  poke hf $ (a' .&. 0xf + r' .&. 0xf) .&. 0x10 /= 0
-  poke cf $ x < r'
-  incPc 1
-  syncCycles 4
-
-add_HL :: Cpu ()
-add_HL = do
-  addr <- Location <$> peek hl
-  x <- peek addr
-  a' <- peek a
-  let a'' = a' + x
-  poke a a''
-  poke zf $ a'' == 0
-  poke nf False
-  poke hf $ (a' .&. 0xf + x .&. 0xf) .&. 0x10 /= 0
-  poke cf $ a'' < x
-  incPc 1
-  syncCycles 4
-
-add_hl_r16 :: Register16 -> Cpu ()
-add_hl_r16 r = do
-  hl' <- peek hl
-  r' <- peek r
-  let x = hl' + r'
-  poke hl x
-  poke nf False
-  poke hf $ (hl' .&. 0xf + r' .&. 0xf) .&. 0x10 /= 0
-  poke cf $ x < r'
-  incPc 1
-  syncCycles 8
-
-adc_a_r8 :: Register -> Cpu ()
-adc_a_r8 r = do
-  c' <- bool 0 1 <$> peek cf
-  a' <- peek a
-  r' <- (+ c') <$> peek r
-  let x = a' + r'
-  poke a x
-  poke zf $ x == 0x00
-  poke nf False
-  poke hf $ (a' .&. 0xf + r' .&. 0xf) .&. 0x10 /= 0x00
-  poke cf $ x < r'
-  incPc 1
-  syncCycles 4
-
-adc_a_HL :: Cpu ()
-adc_a_HL = do
-  c' <- bool 0 1 <$> peek cf
-  a' <- peek a
-  addr <- Location <$> peek hl
-  x <- (+ c') <$> peek addr
-  let a'' = a' + x
-  poke a a''
-  poke zf $ a'' == 0x00
-  poke nf False
-  poke hf $ (a' .&. 0xf + x .&. 0xf) .&. 0x10 /= 0x00
-  poke cf $ a'' < x
-  incPc 1
-  syncCycles 8
-
-and_r8 :: Register -> Cpu ()
-and_r8 r = do
-  a' <- (.&.) <$> peek a <*> peek r
-  poke a a'
-  poke zf $ a' == 0
-  poke nf False
-  poke hf True
-  poke cf False
-  incPc 1
-  syncCycles 4
-
-and_HL :: Cpu ()
-and_HL = do
-  addr <- Location <$> peek hl
-  a' <- (.&.) <$> peek a <*> peek addr
-  poke a a'
-  poke zf $ a' == 0
-  poke nf False
-  poke hf True
-  poke cf False
-  incPc 1
-  syncCycles 8
-
-compare_r8 :: Register -> Cpu ()
-compare_r8 r = do
-  a' <- peek a
-  x <- peek r
-  let a'' = a' - x
-  poke zf $ a'' == 0
-  poke nf True
-  poke hf $ (a' .&. 0xf - x .&. 0xf) .&. 0x10 /= 0
-  poke cf $ a'' > a'
-  incPc 1
-  syncCycles 4
-  return ()
-
-compare_HL :: Cpu ()
-compare_HL = do
-  addr <- Location <$> peek hl
-  a' <- peek a
-  x <- peek addr
-  let a'' = a' - x
-  poke zf $ a'' == 0
-  poke nf True
-  poke hf $ (a' .&. 0xf - x .&. 0xf) .&. 0x10 /= 0
-  poke cf $ a'' > a'
-  incPc 1
-  syncCycles 8
-  return ()
-
-complementA :: Cpu ()
-complementA = do
-  pokeWith a complement
-  poke nf True
-  poke hf True
-
-or_r8 :: Register -> Cpu ()
-or_r8 r = do
-  a' <- (.|.) <$> peek a <*> peek r
-  poke a a'
-  poke zf $ a' == 0
-  poke nf False
-  poke hf False
-  poke cf False
-  incPc 1
-  syncCycles 4
-
-or_HL :: Cpu ()
-or_HL = do
-  addr <- Location <$> peek hl
-  a' <- (.|.) <$> peek a <*> peek addr
-  poke a a'
-  poke zf $ a' == 0
-  poke nf False
-  poke hf False
-  poke cf False
-  incPc 1
-  syncCycles 8
-
-xor_r8 :: Register -> Cpu ()
-xor_r8 r = do
-  a' <- xor <$> peek a <*> peek r
-  poke a a'
-  poke zf $ a' == 0
-  poke nf False
-  poke hf False
-  poke cf False
-  incPc 1
-  syncCycles 4
-
-xor_HL :: Cpu ()
-xor_HL = do
-  addr <- Location <$> peek hl
-  a' <- xor <$> peek a <*> peek addr
-  poke a a'
-  poke zf $ a' == 0
-  poke nf False
-  poke hf False
-  poke cf False
-  incPc 1
-  syncCycles 8
-
-sbc_r8 :: Register -> Cpu ()
-sbc_r8 r = do
-  c' <- bool 0 1 <$> peek cf
-  a' <- peek a
-  x <- (+ c') <$> peek r
-  let a'' = a' - x
-  poke a a''
-  poke zf $ a'' == 0
-  poke nf True
-  poke hf $ (a' .&. 0xf - x .&. 0xf) .&. 0x10 /= 0
-  poke cf $ a'' > a'
-  incPc 1
-  syncCycles 4
-  return ()
-
-sbc_HL :: Cpu ()
-sbc_HL = do
-  addr <- Location <$> peek hl
-  c' <- bool 0 1 <$> peek cf
-  a' <- peek a
-  x <- (+ c') <$> peek addr
-  let a'' = a' - x
-  poke a a''
-  poke zf $ a'' == 0
-  poke nf True
-  poke hf $ (a' .&. 0xf - x .&. 0xf) .&. 0x10 /= 0
-  poke cf $ a'' > a'
-  incPc 1
-  syncCycles 8
-  return ()
-
-sub_r8 :: Register -> Cpu ()
-sub_r8 r = do
-  a' <- peek a
-  r' <- peek r
-  let x = a' - r'
-  poke a x
-  poke zf $ x == 0
-  poke nf True
-  poke hf $ (a' .&. 0xf - r' .&. 0xf) .&. 0x10 /= 0
-  poke cf $ x > a'
-  incPc 1
-  syncCycles 4
-  return ()
-
-sub_HL :: Cpu ()
-sub_HL = do
-  addr <- Location <$> peek hl
-  a' <- peek a
-  x <- peek addr
-  let a'' = a' - x
-  poke a a''
-  poke zf $ a'' == 0
-  poke nf True
-  poke hf $ (a' .&. 0xf - x .&. 0xf) .&. 0x10 /= 0
-  poke cf $ a'' > a'
-  incPc 1
-  syncCycles 8
-  return ()
-
-
--- Increment / decrement
---
--- Increment or decrement the destination.
-
-dec_HL :: Cpu ()
-dec_HL = do
-  addr <- Location <$> peek hl
-  x <- pokeWith' addr . subtract $ 1
-  poke zf $ x == 0
-  poke nf True
-  poke hf $ x == 0xff
-  incPc 1
-  syncCycles 12
-
-dec_r8 :: Register -> Cpu ()
-dec_r8 dst = do
-  x <- subtract 1 <$> peek dst
-  poke dst x
-  poke zf $ x == 0
-  poke nf True
-  poke hf $ x == 0xff
-  incPc 1
-  syncCycles 4
-
-dec_r16 :: Register16 -> Cpu ()
-dec_r16 dst = do
-  x <- subtract 1 <$> peek dst
-  poke dst x
-  incPc 1
-  syncCycles 8
-
-inc_HL :: Cpu ()
-inc_HL = do
-  addr <- Location <$> peek hl
-  x <- pokeWith' addr (+1)
-  poke zf $ x == 0
-  poke nf False
-  poke hf $ x == 0x10
-  incPc 1
-  syncCycles 12
-
-inc_r8 :: Register -> Cpu ()
-inc_r8 dst = do
-  x <- (+1) <$> peek dst
-  poke dst x
-  poke zf $ x == 0
-  poke nf False
-  poke hf $ x == 0x10
-  incPc 1
-  syncCycles 4
-
-inc_r16 :: Register16 -> Cpu ()
-inc_r16 dst = do
-  x <- (+1) <$> peek dst
-  poke dst x
-  incPc 1
-  syncCycles 8
-
-
--- Load instructions
-
-ld_HL_n8 :: Cpu ()
-ld_HL_n8 = do
-  hlAddr <- Location <$> peek hl
-  n8Addr <- Location . (+1) <$> peek pc
-  peek n8Addr >>= poke hlAddr
-  incPc 2
-  syncCycles 12
-
-ld_a_HL' :: IncDec -> Cpu ()
-ld_a_HL' opr = do
-  addr <- Location <$> peek hl
-  pokeWith hl $ incDec opr
-  peek addr >>= poke a
-  incPc 1
-  syncCycles 8
-
-ld_HL'_a :: IncDec -> Cpu ()
-ld_HL'_a opr = do
-  addr <- Location <$> peek hl
-  pokeWith hl $ incDec opr
-  peek a >>= poke addr
-  incPc 1
-  syncCycles 8
-
-ld_a_R16 :: Register16 -> Cpu ()
-ld_a_R16 r16 = do
-  addr <- Location <$> peek r16
-  x <- peek addr
-  poke a x
-  incPc 1
-  syncCycles 8
-
-ld_r8_n8 :: Register -> Cpu ()
-ld_r8_n8 dst = do
-  addr <- Location . (+1) <$> peek pc
-  x <- peek addr
-  poke dst x
-  incPc 2
-  syncCycles 8
-
-ld_r16_N16 :: Register16 -> Cpu ()
-ld_r16_N16 dst = do
-  addr <- Location16 . (+1) <$> peek pc
-  x <- peek addr
-  poke dst x
-  incPc 3
-  syncCycles 12
-
-ld_r8_r8 :: Register -> Register -> Cpu ()
-ld_r8_r8 dst src = do
-  x <- peek src
-  poke dst x
-  incPc 1
-  syncCycles 4
-
-ld_R16_r8 :: Register16 -> Register -> Cpu ()
-ld_R16_r8 ptr src = do
-  l' <- Location <$> peek ptr
-  x <- peek src
-  poke l' x
-  incPc 1
-  syncCycles 8
-
-ld_r8_R16 :: Register -> Register16 -> Cpu ()
-ld_r8_R16 dst ptr = do
-  l' <- Location <$> peek ptr
-  x <- peek l'
-  poke dst x
-  incPc 1
-  syncCycles 8
-
-ld_N16_sp :: Cpu ()
-ld_N16_sp = do
-  addr <- Location16 . (+1) <$> peek pc
-  x <- peek sp
-  poke addr x
-  incPc 3
-  syncCycles 20
-
--- Relative jumps
-
-jr :: Cpu ()
-jr =  do
-  addr <- Location16 . (+1) <$> peek pc
-  x <- peek addr
-  pokeWith pc (+ x)
-  syncCycles 12
-
-jrCc :: Flag -> Cpu ()
-jrCc cc = do
-  cc' <- peek cc
-  if cc'
-    then do
-      addr <- Location16 . (+1) <$> peek pc
-      x <- peek addr
-      pokeWith pc (+ x)
-      syncCycles 12
-    else do
-      incPc 2
-      syncCycles 8
-
-jrNCc :: Flag -> Cpu ()
-jrNCc cc = do
-  cc' <- not <$> peek cc
-  if cc'
-    then do
-      addr <- Location16 . (+1) <$> peek pc
-      x <- peek addr
-      pokeWith pc (+ x)
-      syncCycles 12
-    else do
-      incPc 2
-      syncCycles 8
-
--- Bitwise operations
-
-reset_b_r8 :: Int -> Register -> Cpu ()
-reset_b_r8 b' r = do
-  pokeWith r (`clearBit` b')
-  incPc 2
-  syncCycles 8
-
-reset_b_HL :: Int -> Cpu ()
-reset_b_HL b' = do
-  hl' <- peek hl
-  pokeWith (Location hl') (`clearBit` b')
-  incPc 2
-  syncCycles 16
-
--- rotateL_a — More efficient left rotate for the accumulator only.
---
---  Always sets zero flag to false unlike other rotateX_x functions.
---
-rotateL_a :: Cpu ()
-rotateL_a = do
-  a' <- flip rotate 1 <$> peek a
-  poke a a'
-  poke zf False
-  poke nf False
-  poke hf False
-  poke cf $ a' `testBit` 0
-  incPc 1
-  syncCycles 4
-
-rotateL_r8 :: Register -> Cpu ()
-rotateL_r8 r = do
-  x <- pokeWith' r $ flip rotate 1
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ x `testBit` 0
-  incPc 2
-  syncCycles 8
-
-rotateL_HL :: Cpu ()
-rotateL_HL = do
-  l' <- Location <$> peek hl
-  x <- pokeWith' l' . flip rotate $ 1
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ x `testBit` 7
-  incPc 2
-  syncCycles 16
-
--- rotateLC_a — More efficient left rotate through carry for the accumulator
---   only.
---
---  Always sets zero flag to false unlike other rotateX_x functions.
---
-rotateLC_a :: Cpu ()
-rotateLC_a = do
-  c' <- peek cf
-  a' <- peek a
-  let a'' = flip (`assignBit` 0) c' . shift a' $ 1
-  poke a a''
-  poke zf False
-  poke nf False
-  poke hf False
-  poke cf . testBit a' $ 7
-  incPc 1
-  syncCycles 4
-
-rotateLC_r8 :: Register -> Cpu ()
-rotateLC_r8 r = do
-  c' <- peek cf
-  x <- peek r
-  let x' = flip (`assignBit` 0) c' . shift x $ 1
-  poke r x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf . testBit x $ 7
-  incPc 2
-  syncCycles 8
-
-rotateLC_HL :: Cpu ()
-rotateLC_HL = do
-  c' <- peek cf
-  addr <- Location <$> peek hl
-  x <- peek addr
-  let x' = flip (`assignBit` 0) c' . shift x $ 1
-  poke addr x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf . testBit x $ 7
-  incPc 2
-  syncCycles 16
-
--- rotateR_a — More efficient right rotate for the accumulator only.
---
---  Always sets zero flag to false unlike other rotateX_x functions.
---
-rotateR_a :: Cpu ()
-rotateR_a = do
-  a' <- pokeWith' a $ flip rotate (-1)
-  poke zf $ a' == 0
-  poke nf False
-  poke hf False
-  poke cf $ a' `testBit` 7
-  incPc 1
-  syncCycles 4
-
-rotateR_r8 :: Register -> Cpu ()
-rotateR_r8 r = do
-  x <- pokeWith' r $ flip rotate (-1)
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ x `testBit` 7
-  incPc 2
-  syncCycles 8
-
-rotateR_HL :: Cpu ()
-rotateR_HL = do
-  l' <- Location <$> peek hl
-  x <- pokeWith' l' $ flip rotate (-1)
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ x `testBit` 7
-  incPc 2
-  syncCycles 16
-
--- rotateRC_a — More efficient right rotate through carry for the accumulator
---   only.
---
---  Always sets zero flag to false unlike other rotateX_x functions.
---
-rotateRC_a :: Cpu ()
-rotateRC_a = do
-  c' <- peek cf
-  a' <- peek a
-  let a'' = flip (`assignBit` 7) c' . shift a' $ -1
-  poke a a''
-  poke zf False
-  poke nf False
-  poke hf False
-  poke cf . testBit a' $ 0
-  incPc 1
-  syncCycles 4
-
-rotateRC_r8 :: Register -> Cpu ()
-rotateRC_r8 r = do
-  c' <- peek cf
-  x <- peek r
-  let x' = flip (`assignBit` 7) c' . shift x $ -1
-  poke r x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf . testBit x $ 0
-  incPc 2
-  syncCycles 8
-
-rotateRC_HL :: Cpu ()
-rotateRC_HL = do
-  c' <- peek cf
-  addr <- Location <$> peek hl
-  x <- peek addr
-  let x' = flip (`assignBit` 7) c' . shift x $ -1
-  poke addr x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf . testBit x $ 0
-  incPc 2
-  syncCycles 16
-
-set_b_r8 :: Int -> Register -> Cpu ()
-set_b_r8 b' r = do
-  pokeWith r (`setBit` b')
-  incPc 2
-  syncCycles 8
-
-set_b_HL :: Int -> Cpu ()
-set_b_HL b' = do
-  l' <- Location <$> peek hl
-  pokeWith l' (`setBit` b')
-  incPc 2
-  syncCycles 16
-
-shiftLeftArithmetically_r8 :: Register -> Cpu ()
-shiftLeftArithmetically_r8 r = do
-  r' <- peek r
-  let x = shift r' 1
-  poke r x
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ testBit r' 7
-  incPc 2
-  syncCycles 8
-
-shiftLeftArithmetically_HL :: Cpu ()
-shiftLeftArithmetically_HL = do
-  addr <- Location <$> peek hl
-  x <- peek addr
-  let x' = shift x 1
-  poke addr x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf $ testBit x 7
-  incPc 2
-  syncCycles 8
-
-shiftRightArithmetically_r8 :: Register -> Cpu ()
-shiftRightArithmetically_r8 r = do
-  r' <- peek r
-  let x = shift r' $ -1
-  poke r x
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ testBit r' 0
-  incPc 2
-  syncCycles 8
-
-shiftRightArithmetically_HL :: Cpu ()
-shiftRightArithmetically_HL = do
-  addr <- Location <$> peek hl
-  x <- peek addr
-  let x' = shift x $ -1
-  poke addr x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf $ testBit x 0
-  incPc 2
-  syncCycles 8
-
-shiftRightLogical_r8 :: Register -> Cpu ()
-shiftRightLogical_r8 r = do
-  r' <- peek r
-  let x = shift r' (-1)
-  poke r x
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf $ r' `testBit` 0
-  incPc 2
-  syncCycles 8
-
-shiftRightLogical_HL :: Cpu ()
-shiftRightLogical_HL = do
-  l' <- Location <$> peek hl
-  x <- peek l'
-  let x' = shift x (-1)
-  poke l' x'
-  poke zf $ x' == 0
-  poke nf False
-  poke hf False
-  poke cf $ x `testBit` 0
-  incPc 2
-  syncCycles 8
-
-swap_r8 :: Register -> Cpu ()
-swap_r8 r = do
-  x <- pokeWith' r swapNibbles
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf False
-  incPc 2
-  syncCycles 8
-
-swap_HL :: Cpu ()
-swap_HL = do
-  l' <- Location <$> peek hl
-  x <- pokeWith' l' swapNibbles
-  poke zf $ x == 0
-  poke nf False
-  poke hf False
-  poke cf False
-  incPc 2
-  syncCycles 16
-
-test_b_r8 :: Int -> Register -> Cpu ()
-test_b_r8 b' r = do
-  z' <- not . (`testBit` b') <$> peek r
-  poke zf z'
-  poke nf False
-  poke hf True
-  incPc 2
-  syncCycles 8
-
-test_b_HL :: Int -> Cpu ()
-test_b_HL b' = do
-  l' <- Location <$> peek hl
-  z' <- not . (`testBit` b') <$> peek l'
-  poke zf z'
-  poke nf False
-  poke hf True
-  incPc 2
-  syncCycles 16
-
--- Carry flag instructions
-
-complementCarry :: Cpu ()
-complementCarry = do
-  poke nf False
-  poke hf False
-  pokeWith cf not
-  incPc 1
-  syncCycles 4
-
-setCarry :: Cpu ()
-setCarry = do
-  poke nf False
-  poke hf False
-  poke cf True
-  incPc 1
-  syncCycles 4
 
 -- Misc instructions
 
@@ -2148,20 +1188,10 @@ noop = do
   incPc 1
   syncCycles 4
 
--- Utilities
-
-word16 :: Word8 -> Word8 -> Word16
-word16 hi lo =
-  let x = flip shift 8 . fromIntegral $ hi
-  in x + fromIntegral lo
-
-unWord16 :: Word16 -> (Word8, Word8)
-unWord16 x =
-  let hi = fromIntegral . flip shift (-8) $ x
-      lo = fromIntegral x
-  in (hi, lo)
-
-swapNibbles :: Word8 -> Word8
-swapNibbles =
-  (.&.) <$> (`shift` (-4)) . (0xf0 .&.)
-        <*> (`shift` 4) . (0x0f .&.)
+stop :: Cpu ()
+stop = do
+  -- NB: Corrupted STOP instructions hang the CPU i.e. anything other than
+  -- 0x10 0x00
+  _ <- undefined
+  incPc 2
+  syncCycles 4

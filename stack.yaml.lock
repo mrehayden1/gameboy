@@ -3,11 +3,31 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: patch-0.0.8.4@sha256:00904a2f2e6b9bef71b12a5200bc047d6e108af3ad74954eed1795e419949bed,3368
+    pantry-tree:
+      sha256: 3f5acd11096aeba4066b8f95438a68f3ee9b313521c39427730b11f2da4477ae
+      size: 1179
+  original:
+    hackage: patch-0.0.8.4
+- completed:
+    hackage: reflex-0.9.3.4@sha256:aaf1a10e22c566f38ad2d2a6478dafb8185890a33d996770a265fcf28e9eb229,12222
+    pantry-tree:
+      sha256: c3b7643c3108c042eddbf0c292eca8d20dce446f154d6c7be3772836e83b2d43
+      size: 4664
+  original:
+    hackage: reflex-0.9.3.4
+- completed:
+    hackage: reflex-vty-0.6.1.0@sha256:6850863966f68f90b144fd858bd560fa51ee1e086a15f4c38dd90a6047b30b81,3742
+    pantry-tree:
+      sha256: 2662737e1fb7eb0e102933a72009b2e5b2d451b88bb3b0f37f948cfd33b814a9
+      size: 1522
+  original:
+    hackage: reflex-vty-0.6.1.0
 snapshots:
 - completed:
-    sha256: 400dfb2174640dd2f9f2ba7cbf9148699f2380ab64faa46f4be298a5d6205316
-    size: 684057
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/23/24.yaml
-  original:
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/23/24.yaml
+    sha256: 238fa745b64f91184f9aa518fe04bdde6552533d169b0da5256670df83a0f1a9
+    size: 721141
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/44.yaml
+  original: lts-22.44
