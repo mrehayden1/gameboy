@@ -60,9 +60,6 @@ step = do
   pc' <- peek pc
   opCode <- peek $ Location pc'
 
-  -- TODO Hang on illegal opcodes (including corrupted STOP op codes)
-  --  — find out what that means exactly.
-
   -- Handle interrupts
 
   -- IME enable delay
@@ -112,7 +109,7 @@ step = do
 
     -- 0x1x
     -- STOP
-    0x10 -> undefined -- stop
+    0x10 -> stop
     -- LD DE d16
     0x11 -> ld_r16_n16 de
     -- LD (DE) A
@@ -1188,10 +1185,11 @@ noop = do
   incPc 1
   syncCycles 4
 
+-- We can ignore STOP as no ROM should use it for anything other than CGB speed
+-- switching.
 stop :: Cpu ()
 stop = do
   -- NB: Corrupted STOP instructions hang the CPU i.e. anything other than
   -- 0x10 0x00
-  _ <- undefined
   incPc 2
   syncCycles 4
