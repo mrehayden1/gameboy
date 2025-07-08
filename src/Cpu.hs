@@ -121,7 +121,7 @@ step = do
     -- DEC D
     0x15 -> dec_r8 d
     -- LD D d8
-    0x16 -> ld_r8_n8 b
+    0x16 -> ld_r8_n8 d
     -- RLA
     0x17 -> rotateLC_a
     -- JR r8

@@ -279,7 +279,7 @@ instance CpuStorable Register16
 
 
 af' :: Lens' CpuS Word16
-af' = register16 a f
+af' = register16 f a
 
 af :: Register16
 af = Register16 af'
