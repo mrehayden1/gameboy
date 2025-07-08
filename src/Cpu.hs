@@ -523,7 +523,7 @@ step = do
     -- JP NC a16
     0xd2 -> jpCc_n16 True cf
     -- ILLEGAL
-    0xd3 -> return ()
+    0xd3 -> illegal
     -- CALL NC a16
     0xd4 -> callCc_n16 True cf
     -- PUSH DE
@@ -539,11 +539,11 @@ step = do
     -- JP C a16
     0xda -> jpCc_n16 False cf
     -- ILLEGAL
-    0xdb -> return ()
+    0xdb -> illegal
     -- CALL C a16
     0xdc -> callCc_n16 False cf
     -- ILLEGAL
-    0xdd -> return ()
+    0xdd -> illegal
     -- SBC A d8
     0xde -> sbc_n8
     -- RST 18H
@@ -557,9 +557,9 @@ step = do
     -- LD (C) A
     0xe2 -> ldh_C_a
     -- ILLEGAL
-    0xe3 -> return ()
+    0xe3 -> illegal
     -- ILLEGAL
-    0xe4 -> return ()
+    0xe4 -> illegal
     -- PUSH HL
     0xe5 -> push_r16 hl
     -- AND d8
@@ -573,11 +573,11 @@ step = do
     -- LD (a16) A
     0xea -> ld_N16_a
     -- ILLEGAL
-    0xeb -> return ()
+    0xeb -> illegal
     -- ILLEGAL
-    0xec -> return ()
+    0xec -> illegal
     -- ILLEGAL
-    0xed -> return ()
+    0xed -> illegal
     -- XOR d8
     0xee -> xor_n8
     -- RST 28H
@@ -593,7 +593,7 @@ step = do
     -- DI
     0xf3 -> disableInterrupts
     -- ILLEGAL
-    0xf4 -> return ()
+    0xf4 -> illegal
     -- PUSH AF
     0xf5 -> push_r16 af
     -- OR d8
@@ -609,9 +609,9 @@ step = do
     -- EI
     0xfb -> enableInterrupts
     -- ILLEGAL
-    0xfc -> return ()
+    0xfc -> illegal
     -- ILLEGAL
-    0xfd -> return ()
+    0xfd -> illegal
     -- CP d8
     0xfe -> compare_n8
     -- RST 38H
@@ -1193,3 +1193,6 @@ stop = do
   -- 0x10 0x00
   incPc 2
   syncCycles 4
+
+illegal :: Cpu ()
+illegal = error "Illegal op code."
