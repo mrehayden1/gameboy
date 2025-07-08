@@ -92,7 +92,7 @@ data CpuS = CpuS {
   e_   :: !Word8,
   h_   :: !Word8,
   l_   :: !Word8,
-  mem_ :: IOUArray Word16 Word8,
+  mem_ :: !(IOUArray Word16 Word8),
   pc_  :: !Word16,
   sp_  :: !Word16,
   ime_ :: !(Either () Bool)
