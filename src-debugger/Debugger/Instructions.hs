@@ -73,15 +73,15 @@ decodeOp attr = do
     0x1f -> inst0 "RRA"
 
     -- 0x2x
-    0x20 -> inst1 "JR NZ" argI8
-    0x21 -> inst1 "LD HL" argU8
+    0x20 -> inst1 "JR NZ" argR8
+    0x21 -> inst1 "LD HL" argU16
     0x22 -> inst0 "LD (HL+) A"
     0x23 -> inst0 "INC HL"
     0x24 -> inst0 "INC H"
     0x25 -> inst0 "DEC H"
     0x26 -> inst1 "LD H" argU8
     0x27 -> inst0 "DAA"
-    0x28 -> inst1 "JR Z" argI8
+    0x28 -> inst1 "JR Z" argR8
     0x29 -> inst0 "ADD HL HL"
     0x2a -> inst0 "LD A (HL+)"
     0x2b -> inst0 "DEC HL"
@@ -91,7 +91,7 @@ decodeOp attr = do
     0x2f -> inst0 "CPL"
 
     -- 0x3x
-    0x30 -> inst1 "JR NC" argI8
+    0x30 -> inst1 "JR NC" argR8
     0x31 -> inst1 "LD SP" argU16
     0x32 -> inst0 "LD (HL-) A"
     0x33 -> inst0 "INC SP"
@@ -297,7 +297,7 @@ decodeOp attr = do
     0xe5 -> inst0 "PUSH HL"
     0xe6 -> inst1 "AND" argU8
     0xe7 -> inst0 "RST 0x20"
-    0xe8 -> inst1 "ADD SP" argI8
+    0xe8 -> inst1 "ADD SP" argR8
     0xe9 -> inst0 "JP (HL)"
     0xea -> inst1' "LD (" argU16 ") A"
     0xeb -> undefined
@@ -315,7 +315,7 @@ decodeOp attr = do
     0xf5 -> inst0 "PUSH AF"
     0xf6 -> inst1 "OR" argU8
     0xf7 -> inst0 "RST 0x30"
-    0xf8 -> inst1 "LD HL SP+" argI8
+    0xf8 -> inst1' "LD HL SP" argR8 ""
     0xf9 -> inst0 "LD SP HL"
     0xfa -> inst1' "LD A (" argU16 ")"
     0xfb -> inst0 "EI"
@@ -628,15 +628,15 @@ decodeOp attr = do
 
   argU8 = text' . printf "0x%02x" <$> loadWord8
   argU16 = text' . printf "0x%04x" <$> loadWord16
-  argI8 = text' . printf "0x%02x" <$> loadInt8
+  argR8 = text' . printf "%+d" <$> loadInt8
 
   inst0 = return . boldText
   inst1 = fmap . (V.<|>) . boldText . (++ " ")
   inst1' prefix arg suffix = do
     x <- arg
-    return $ (boldText . (++ "") $ prefix)
+    return $ boldText prefix
       V.<|> x
-      V.<|> (boldText suffix)
+      V.<|> boldText suffix
 
   loadWord8 :: Cpu Word8
   loadWord8 = peek . Location . (+1) =<< peek pc

@@ -4,6 +4,8 @@ module Cpu.Core (
   -- CPU monad
   Cpu(..),
   runCpu,
+  evalCpu,
+  execCpu,
 
   -- CPU state
   CpuS(..),
@@ -74,6 +76,12 @@ newtype Cpu a = Cpu { unCpu :: StateT CpuS IO a }
 
 runCpu :: Cpu a -> CpuS -> IO (a, CpuS)
 runCpu m s = flip runStateT s . unCpu $ m
+
+evalCpu :: Cpu a -> CpuS -> IO a
+evalCpu m s = flip evalStateT s . unCpu $ m
+
+execCpu :: Cpu a -> CpuS -> IO CpuS
+execCpu m s = flip execStateT s . unCpu $ m
 
 data CpuS = CpuS {
   a_   :: !Word8,

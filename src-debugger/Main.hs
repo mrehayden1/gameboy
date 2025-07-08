@@ -15,6 +15,8 @@ import qualified Graphics.Vty as V
 import Reflex
 import Reflex.Network
 import Reflex.Vty
+import System.Environment
+import System.Exit
 import Text.Printf
 
 import Cpu
@@ -28,15 +30,20 @@ main = do
   cpu0 <- initCpuS
   let mem = mem_ cpu0
 
-  putStrLn "Loading ROM"
-  --loadRom "roms/blargg/cpu_instrs/cpu_instrs.gb" mem
-  --loadRom "roms/blargg/cpu_instrs/individual/10-bit ops.gb" mem
-  loadRom "roms/count.gb" mem
+  args <- getArgs
 
-  -- Run the ROM directly.
-  --void . runCpu (forever step) $ cpu0
+  when (null args) $ do
+    putStrLn "No ROM specified."
+    putStrLn "Usage: debugger <rom file>"
+    exitFailure
+
+  let romPath = head args
+
+  putStrLn . printf "Loading ROM \"%s\"" $ romPath
+  loadRom (head args) mem
 
   -- Debug the ROM.
+  putStrLn "Loading debugger..."
   mainWidget $ initManager_ $ app cpu0
 
 app :: Widget t m => CpuS -> m (Event t ())

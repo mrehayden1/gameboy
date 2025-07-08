@@ -63,4 +63,12 @@ executables:
     - -threaded
     - -O2
     main:           Main.hs
-    source-dirs:    src-bin
+    source-dirs:    src-debugger
+
+  emulator:
+    dependencies:
+    - gameboy
+    ghc-options:
+    - -O2
+    main:           Main.hs
+    source-dirs:    src-emulator
